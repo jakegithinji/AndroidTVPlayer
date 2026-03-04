@@ -14,11 +14,12 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
-import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
+import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import com.androidtvplayer.R
 import com.androidtvplayer.cache.CacheManager
@@ -34,7 +35,6 @@ class PlayerActivity : FragmentActivity() {
     private lateinit var errorText: TextView
     private lateinit var cacheStatusText: TextView
     private var player: ExoPlayer? = null
-    private lateinit var stream: StreamItem
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -43,50 +43,92 @@ class PlayerActivity : FragmentActivity() {
         loadingSpinner = findViewById(R.id.loading_spinner)
         errorText = findViewById(R.id.error_text)
         cacheStatusText = findViewById(R.id.cache_status_text)
-        stream = Gson().fromJson(intent.getStringExtra(EXTRA_STREAM_JSON), StreamItem::class.java)
-        initializePlayer()
+
+        val url = resolveUrl(intent)
+        if (url == null) {
+            showError("No stream URL provided")
+            return
+        }
+
+        initializePlayer(url)
         updateCacheStatus()
+    }
+
+    /**
+     * Resolves the stream URL from either:
+     * - An internal intent (launched from browse screen)
+     * - An external VIEW intent (clicked link in browser/app)
+     * - An external SEND intent (shared URL from another app)
+     */
+    private fun resolveUrl(intent: Intent): String? {
+        // Launched internally from browse screen
+        intent.getStringExtra(EXTRA_STREAM_JSON)?.let { json ->
+            return Gson().fromJson(json, StreamItem::class.java).url
+        }
+
+        // Opened via VIEW intent (browser, file manager, external app)
+        if (intent.action == Intent.ACTION_VIEW) {
+            intent.dataString?.let { return it }
+            intent.data?.toString()?.let { return it }
+        }
+
+        // Opened via SEND intent (share sheet from another app)
+        if (intent.action == Intent.ACTION_SEND) {
+            intent.getStringExtra(Intent.EXTRA_TEXT)?.let { text ->
+                // Extract URL from shared text (in case it has extra text around it)
+                val urlRegex = Regex("https?://\\S+")
+                return urlRegex.find(text)?.value ?: text.trim()
+            }
+        }
+
+        return null
+    }
+
+    private fun detectStreamType(url: String): StreamType {
+        return when {
+            url.contains(".mpd", ignoreCase = true) -> StreamType.DASH
+            url.contains(".m3u8", ignoreCase = true) -> StreamType.HLS
+            url.contains("manifest", ignoreCase = true) -> StreamType.DASH
+            else -> StreamType.HLS // default to HLS
+        }
     }
 
     private fun buildLoadControl(): LoadControl {
         return DefaultLoadControl.Builder()
-            // Allocate 128GB as the target buffer in memory pipeline
-            // (actual storage goes to SSD via CacheDataSource)
             .setBufferDurationsMs(
-                // Min buffer before starting playback: 10 seconds
                 10_000,
-                // Max buffer to keep in memory pipeline: 2 hours
-                // ExoPlayer will download as fast as possible up to this
                 2 * 60 * 60 * 1000,
-                // Buffer needed to resume after rebuffer: 5 seconds
                 5_000,
-                // Buffer needed to resume after seek: 10 seconds
                 10_000
             )
-            // Allocate maximum memory buffer (128MB in-memory, rest goes to SSD)
             .setTargetBufferBytes(128 * 1024 * 1024)
-            // Always buffer as fast as possible regardless of playback speed
             .setPrioritizeTimeOverSizeThresholds(false)
             .build()
     }
 
-    private fun initializePlayer() {
+    private fun initializePlayer(url: String) {
         val cacheDataSourceFactory = CacheManager.buildCacheDataSourceFactory()
+        val streamType = detectStreamType(url)
+
+        cacheStatusText.text = "▼ Connecting to stream..."
 
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(cacheDataSourceFactory))
             .setLoadControl(buildLoadControl())
             .build().also { exoPlayer ->
                 playerView.player = exoPlayer
-                val mediaSource = when (stream.type) {
+
+                val mediaSource = when (streamType) {
                     StreamType.HLS -> HlsMediaSource.Factory(cacheDataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(stream.url))
+                        .createMediaSource(MediaItem.fromUri(url))
                     StreamType.DASH -> DashMediaSource.Factory(cacheDataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(stream.url))
+                        .createMediaSource(MediaItem.fromUri(url))
                 }
+
                 exoPlayer.setMediaSource(mediaSource)
                 exoPlayer.prepare()
                 exoPlayer.playWhenReady = true
+
                 exoPlayer.addListener(object : Player.Listener {
                     override fun onPlaybackStateChanged(state: Int) {
                         when (state) {
