@@ -8,6 +8,7 @@ import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
+import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
@@ -87,15 +88,19 @@ object CacheManager {
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(15_000)
+            // Large buffer to keep download pipe full
+            .setDefaultRequestProperties(mapOf(
+                "Connection" to "keep-alive"
+            ))
 
         val upstreamFactory = DefaultDataSource.Factory(appContext, httpDataSourceFactory)
 
         return CacheDataSource.Factory()
             .setCache(cache)
             .setUpstreamDataSourceFactory(upstreamFactory)
-            // Write everything to cache, block until written
             .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE)
-            // Do NOT set setCacheWriteDataSinkFactory(null) — that disables writing!
+            // Remove the 2MB per-resource cap — allow unlimited file size caching
+            .setMaxUpstreamBitrate(Int.MAX_VALUE)
     }
 
     fun getCacheStats(): CacheStats {
