@@ -19,23 +19,29 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@v3
+      - name: Download Gradle 8.2 wrapper jar
+        run: |
+          mkdir -p gradle/wrapper
+          curl -L "https://github.com/gradle/gradle/raw/v8.2.0/gradle/wrapper/gradle-wrapper.jar" -o gradle/wrapper/gradle-wrapper.jar || \
+          wget -O gradle/wrapper/gradle-wrapper.jar "https://raw.githubusercontent.com/gradle/gradle/v8.2.0/gradle/wrapper/gradle-wrapper.jar" || \
+          curl -L "https://services.gradle.org/distributions/gradle-8.2-bin.zip" -o /tmp/g.zip && \
+          unzip -j /tmp/g.zip "gradle-8.2/lib/plugins/gradle-wrapper-*.jar" -d /tmp/gw && \
+          cp /tmp/gw/gradle-wrapper-*.jar gradle/wrapper/gradle-wrapper.jar
 
-      - name: Generate Gradle Wrapper
-        run: gradle wrapper --gradle-version 8.2
-
-      - name: Cache Gradle packages
-        uses: actions/cache@v4
-        with:
-          path: |
-            ~/.gradle/caches
-            ~/.gradle/wrapper
-          key: gradle-${{ hashFiles('**/*.gradle*', '**/gradle-wrapper.properties') }}
-          restore-keys: gradle-
+      - name: Install Gradle 8.2 via SDKMAN
+        run: |
+          curl -s "https://get.sdkman.io" | bash
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk install gradle 8.2
+          sdk use gradle 8.2
+          gradle wrapper --gradle-version 8.2
+          chmod +x gradlew
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: |
+          source "$HOME/.sdkman/bin/sdkman-init.sh"
+          sdk use gradle 8.2
+          ./gradlew assembleDebug --stacktrace
 
       - name: Upload APK
         uses: actions/upload-artifact@v4
