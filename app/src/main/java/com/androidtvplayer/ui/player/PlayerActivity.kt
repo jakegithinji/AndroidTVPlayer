@@ -14,6 +14,8 @@ import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
 import androidx.media3.exoplayer.ExoPlayer
+import androidx.media3.exoplayer.LoadControl
+import androidx.media3.exoplayer.DefaultLoadControl
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
 import androidx.media3.exoplayer.source.DefaultMediaSourceFactory
@@ -46,10 +48,34 @@ class PlayerActivity : FragmentActivity() {
         updateCacheStatus()
     }
 
+    private fun buildLoadControl(): LoadControl {
+        return DefaultLoadControl.Builder()
+            // Allocate 128GB as the target buffer in memory pipeline
+            // (actual storage goes to SSD via CacheDataSource)
+            .setBufferDurationsMs(
+                // Min buffer before starting playback: 10 seconds
+                10_000,
+                // Max buffer to keep in memory pipeline: 2 hours
+                // ExoPlayer will download as fast as possible up to this
+                2 * 60 * 60 * 1000,
+                // Buffer needed to resume after rebuffer: 5 seconds
+                5_000,
+                // Buffer needed to resume after seek: 10 seconds
+                10_000
+            )
+            // Allocate maximum memory buffer (128MB in-memory, rest goes to SSD)
+            .setTargetBufferBytes(128 * 1024 * 1024)
+            // Always buffer as fast as possible regardless of playback speed
+            .setPrioritizeTimeOverSizeThresholds(false)
+            .build()
+    }
+
     private fun initializePlayer() {
         val cacheDataSourceFactory = CacheManager.buildCacheDataSourceFactory()
+
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(cacheDataSourceFactory))
+            .setLoadControl(buildLoadControl())
             .build().also { exoPlayer ->
                 playerView.player = exoPlayer
                 val mediaSource = when (stream.type) {
@@ -80,7 +106,7 @@ class PlayerActivity : FragmentActivity() {
 
     private fun updateCacheStatus() {
         val stats = CacheManager.getCacheStats()
-        cacheStatusText.text = "Cache: ${stats.usedMb}MB / ${stats.maxMb}MB"
+        cacheStatusText.text = "Cache: ${stats.usedGb}GB / ${stats.maxGb}GB  ▼ Buffering to SSD..."
     }
 
     private fun showLoading(show: Boolean) {
@@ -116,7 +142,6 @@ class PlayerActivity : FragmentActivity() {
         super.onDestroy()
         player?.release()
         player = null
-        // Clear SSD cache when exiting the stream
         CacheManager.clearCache()
     }
 
