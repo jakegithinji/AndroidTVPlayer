@@ -4,10 +4,9 @@
     android:height="100dp"
     android:viewportWidth="240"
     android:viewportHeight="100">
-    <rect
-        android:width="240"
-        android:height="100"
-        android:fillColor="#1E1E3A" />
+    <path
+        android:fillColor="#1E1E3A"
+        android:pathData="M0,0h240v100h-240z" />
     <path
         android:fillColor="#4FC3F7"
         android:pathData="M95,30 L95,70 L145,50 Z" />
