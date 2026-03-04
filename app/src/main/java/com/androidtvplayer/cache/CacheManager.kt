@@ -2,6 +2,7 @@ package com.androidtvplayer.cache
 
 import android.content.Context
 import android.os.Environment
+import android.os.StatFs
 import android.util.Log
 import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DataSource
@@ -13,22 +14,13 @@ import androidx.media3.datasource.cache.SimpleCache
 import com.androidtvplayer.data.PreferencesManager
 import java.io.File
 
-/**
- * CacheManager
- *
- * Manages ExoPlayer's SimpleCache, routing the cache directory to an
- * external USB/SSD drive when one is available, with fallback to
- * internal storage.
- *
- * Cache size is user-configurable via PreferencesManager.
- */
 object CacheManager {
 
     private const val TAG = "CacheManager"
     private const val CACHE_DIR_NAME = "tvplayer_cache"
 
-    // Default cache size: 20 GB
-    private const val DEFAULT_CACHE_SIZE_BYTES = 20L * 1024 * 1024 * 1024
+    // 128 GB in bytes
+    private const val SSD_CACHE_SIZE_BYTES = 128L * 1024 * 1024 * 1024
 
     private var simpleCache: SimpleCache? = null
     private var databaseProvider: StandaloneDatabaseProvider? = null
@@ -40,13 +32,17 @@ object CacheManager {
     }
 
     private fun buildCache() {
-        release() // release any existing cache first
+        release()
 
         val cacheDir = resolveCacheDirectory()
-        val cacheSizeBytes = PreferencesManager.getCacheSizeMb(appContext) * 1024L * 1024L
+        
+        // Use full available space on the SSD, up to 128GB
+        val availableBytes = getAvailableSpace(cacheDir)
+        val cacheSizeBytes = minOf(SSD_CACHE_SIZE_BYTES, availableBytes)
 
         Log.i(TAG, "Cache directory: ${cacheDir.absolutePath}")
-        Log.i(TAG, "Cache size: ${cacheSizeBytes / (1024 * 1024)} MB")
+        Log.i(TAG, "Available space: ${availableBytes / (1024 * 1024 * 1024)} GB")
+        Log.i(TAG, "Cache size set to: ${cacheSizeBytes / (1024 * 1024 * 1024)} GB")
 
         databaseProvider = StandaloneDatabaseProvider(appContext)
         simpleCache = SimpleCache(
@@ -56,58 +52,53 @@ object CacheManager {
         )
     }
 
-    /**
-     * Resolves the best available cache directory.
-     * Priority: External SSD > External SD card > Internal storage
-     */
+    private fun getAvailableSpace(dir: File): Long {
+        return try {
+            val stat = StatFs(dir.absolutePath)
+            stat.availableBlocksLong * stat.blockSizeLong
+        } catch (e: Exception) {
+            SSD_CACHE_SIZE_BYTES
+        }
+    }
+
     fun resolveCacheDirectory(): File {
         val externalDirs = appContext.getExternalFilesDirs(null)
 
-        // Walk through available external volumes; prefer removable/high-capacity ones
+        // Prefer physical non-emulated storage (SSD/USB)
         for (dir in externalDirs) {
             if (dir == null) continue
             val state = Environment.getExternalStorageState(dir)
             if (state == Environment.MEDIA_MOUNTED) {
-                // Prefer non-emulated (physical) storage (SSD/USB drive)
                 if (!Environment.isExternalStorageEmulated(dir)) {
                     val cacheDir = File(dir, CACHE_DIR_NAME)
                     if (cacheDir.mkdirs() || cacheDir.exists()) {
-                        Log.i(TAG, "Using external storage (SSD/USB): ${cacheDir.absolutePath}")
+                        Log.i(TAG, "Using SSD/USB: ${cacheDir.absolutePath}")
                         return cacheDir
                     }
                 }
             }
         }
 
-        // Fallback: first available mounted external dir (emulated/SD)
+        // Fallback to any mounted external
         for (dir in externalDirs) {
             if (dir == null) continue
-            val state = Environment.getExternalStorageState(dir)
-            if (state == Environment.MEDIA_MOUNTED) {
+            if (Environment.getExternalStorageState(dir) == Environment.MEDIA_MOUNTED) {
                 val cacheDir = File(dir, CACHE_DIR_NAME)
                 if (cacheDir.mkdirs() || cacheDir.exists()) {
-                    Log.i(TAG, "Using external storage (emulated): ${cacheDir.absolutePath}")
+                    Log.i(TAG, "Using external storage: ${cacheDir.absolutePath}")
                     return cacheDir
                 }
             }
         }
 
-        // Final fallback: internal app cache
         val internalCacheDir = File(appContext.cacheDir, CACHE_DIR_NAME)
         internalCacheDir.mkdirs()
-        Log.w(TAG, "No external storage found. Using internal cache: ${internalCacheDir.absolutePath}")
+        Log.w(TAG, "Fallback to internal cache: ${internalCacheDir.absolutePath}")
         return internalCacheDir
     }
 
-    /**
-     * Returns a CacheDataSource.Factory that wraps an HTTP source with
-     * the SimpleCache for transparent read-through caching.
-     */
     fun buildCacheDataSourceFactory(): CacheDataSource.Factory {
-        val cache = simpleCache ?: run {
-            buildCache()
-            simpleCache!!
-        }
+        val cache = simpleCache ?: run { buildCache(); simpleCache!! }
 
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
@@ -119,29 +110,25 @@ object CacheManager {
         return CacheDataSource.Factory()
             .setCache(cache)
             .setUpstreamDataSourceFactory(upstreamFactory)
-            .setFlags(CacheDataSource.FLAG_IGNORE_CACHE_ON_ERROR)
+            // Cache everything, never skip due to errors
+            .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE)
+            // No cap on how much of a single resource to cache (full file)
+            .setCacheWriteDataSinkFactory(null)
     }
 
-    /**
-     * Returns cache statistics for display in the UI.
-     */
     fun getCacheStats(): CacheStats {
-        val cache = simpleCache ?: return CacheStats(0L, 0L, resolveCacheDirectory())
+        val cache = simpleCache ?: return CacheStats(0L, SSD_CACHE_SIZE_BYTES, resolveCacheDirectory())
         val cacheDir = resolveCacheDirectory()
         val usedBytes = cache.cacheSpace
-        val maxBytes = PreferencesManager.getCacheSizeMb(appContext) * 1024L * 1024L
+        val availableBytes = getAvailableSpace(cacheDir)
+        val maxBytes = minOf(SSD_CACHE_SIZE_BYTES, usedBytes + availableBytes)
         return CacheStats(usedBytes, maxBytes, cacheDir)
     }
 
-    /**
-     * Clears all cached content.
-     */
     fun clearCache() {
         try {
             simpleCache?.let { c ->
-                c.keys.toList().forEach { key ->
-                    c.removeResource(key)
-                }
+                c.keys.toList().forEach { key -> c.removeResource(key) }
             }
             Log.i(TAG, "Cache cleared")
         } catch (e: Exception) {
@@ -149,12 +136,7 @@ object CacheManager {
         }
     }
 
-    /**
-     * Rebuilds cache with updated settings (e.g. new size or new directory).
-     */
-    fun rebuildCache() {
-        buildCache()
-    }
+    fun rebuildCache() { buildCache() }
 
     fun release() {
         try {
@@ -173,6 +155,8 @@ object CacheManager {
     ) {
         val usedMb: Long get() = usedBytes / (1024 * 1024)
         val maxMb: Long get() = maxBytes / (1024 * 1024)
+        val usedGb: String get() = "%.1f".format(usedBytes / (1024.0 * 1024 * 1024))
+        val maxGb: String get() = "%.1f".format(maxBytes / (1024.0 * 1024 * 1024))
         val percentUsed: Int get() = if (maxBytes > 0) ((usedBytes * 100) / maxBytes).toInt() else 0
         val storagePath: String get() = cacheDir.absolutePath
     }
