@@ -3,18 +3,21 @@ package com.androidtvplayer.ui.player
 import android.content.Context
 import android.content.Intent
 import android.os.Bundle
+import android.os.Handler
+import android.os.Looper
 import android.view.KeyEvent
 import android.view.View
 import android.widget.ProgressBar
 import android.widget.TextView
 import android.widget.Toast
 import androidx.fragment.app.FragmentActivity
+import androidx.lifecycle.lifecycleScope
 import androidx.media3.common.MediaItem
 import androidx.media3.common.PlaybackException
 import androidx.media3.common.Player
 import androidx.media3.common.util.UnstableApi
-import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.DefaultLoadControl
+import androidx.media3.exoplayer.ExoPlayer
 import androidx.media3.exoplayer.LoadControl
 import androidx.media3.exoplayer.dash.DashMediaSource
 import androidx.media3.exoplayer.hls.HlsMediaSource
@@ -23,26 +26,39 @@ import androidx.media3.exoplayer.source.ProgressiveMediaSource
 import androidx.media3.ui.PlayerView
 import com.androidtvplayer.R
 import com.androidtvplayer.cache.CacheManager
+import com.androidtvplayer.cache.StreamDownloader
 import com.androidtvplayer.data.StreamItem
 import com.androidtvplayer.data.StreamType
 import com.google.gson.Gson
+import kotlinx.coroutines.Job
+import kotlinx.coroutines.launch
+import java.io.File
 
 @UnstableApi
 class PlayerActivity : FragmentActivity() {
 
     private lateinit var playerView: PlayerView
     private lateinit var loadingSpinner: ProgressBar
+    private lateinit var downloadProgress: ProgressBar
     private lateinit var errorText: TextView
-    private lateinit var cacheStatusText: TextView
+    private lateinit var statusText: TextView
+    private lateinit var downloadText: TextView
+
     private var player: ExoPlayer? = null
+    private var downloadJob: Job? = null
+    private var downloadedFile: File? = null
+    private var playbackStarted = false
 
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         setContentView(R.layout.activity_player)
+
         playerView = findViewById(R.id.player_view)
         loadingSpinner = findViewById(R.id.loading_spinner)
+        downloadProgress = findViewById(R.id.download_progress)
         errorText = findViewById(R.id.error_text)
-        cacheStatusText = findViewById(R.id.cache_status_text)
+        statusText = findViewById(R.id.cache_status_text)
+        downloadText = findViewById(R.id.download_text)
 
         val url = resolveUrl(intent)
         if (url == null) {
@@ -50,8 +66,7 @@ class PlayerActivity : FragmentActivity() {
             return
         }
 
-        initializePlayer(url)
-        updateCacheStatus()
+        startDownloadThenPlay(url)
     }
 
     private fun resolveUrl(intent: Intent): String? {
@@ -71,50 +86,78 @@ class PlayerActivity : FragmentActivity() {
         return null
     }
 
-    private enum class MediaType { HLS, DASH, PROGRESSIVE }
+    private fun startDownloadThenPlay(url: String) {
+        val outputFile = CacheManager.getDownloadFile(url)
+        downloadedFile = outputFile
 
-    private fun detectMediaType(url: String): MediaType {
-        val clean = url.lowercase().split("?")[0] // ignore query params
+        statusText.text = "⬇ Downloading to SSD at full speed..."
+        downloadProgress.visibility = View.VISIBLE
+        downloadText.visibility = View.VISIBLE
+        showLoading(true)
+
+        downloadJob = lifecycleScope.launch {
+            StreamDownloader.download(url, outputFile) { state ->
+                runOnUiThread {
+                    when {
+                        state.error != null -> {
+                            // Download failed — fall back to direct stream
+                            showLoading(false)
+                            statusText.text = "⚠ SSD unavailable, streaming directly..."
+                            downloadProgress.visibility = View.GONE
+                            downloadText.visibility = View.GONE
+                            startPlayer(url, fromFile = false)
+                        }
+                        state.isReadyToPlay && !playbackStarted -> {
+                            // Enough downloaded — start playing from SSD file
+                            playbackStarted = true
+                            downloadProgress.visibility = View.GONE
+                            showLoading(false)
+                            startPlayer(outputFile.absolutePath, fromFile = true)
+                            updateDownloadStatus(state)
+                        }
+                        state.isComplete -> {
+                            downloadText.text = "✅ Fully cached to SSD: ${state.downloadedGb} GB"
+                            statusText.text = "Playing from SSD"
+                        }
+                        else -> {
+                            // Still downloading
+                            downloadProgress.progress = state.progressPercent
+                            val speedText = if (state.speedMbps > 0) " @ ${"%.1f".format(state.speedMbps)} Mbps" else ""
+                            downloadText.text = "⬇ ${state.downloadedGb} GB / ${state.totalGb} GB$speedText"
+                            statusText.text = "${state.progressPercent}% cached to SSD"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private fun updateDownloadStatus(state: StreamDownloader.DownloadState) {
+        if (state.isComplete) return
+        val speedText = if (state.speedMbps > 0) " @ ${"%.1f".format(state.speedMbps)} Mbps" else ""
+        downloadText.text = "⬇ ${state.downloadedGb} GB / ${state.totalGb} GB$speedText"
+        statusText.text = "${state.progressPercent}% cached — Playing from SSD"
+    }
+
+    private fun detectMediaType(url: String): StreamType {
+        val clean = url.lowercase().split("?")[0]
         return when {
-            clean.endsWith(".m3u8") -> MediaType.HLS
-            clean.contains(".m3u8") -> MediaType.HLS
-            clean.endsWith(".mpd") -> MediaType.DASH
-            clean.contains(".mpd") -> MediaType.DASH
-            clean.contains("manifest") && !clean.contains(".mp4") -> MediaType.DASH
-            // Direct file formats
-            clean.endsWith(".mkv") -> MediaType.PROGRESSIVE
-            clean.endsWith(".mp4") -> MediaType.PROGRESSIVE
-            clean.endsWith(".avi") -> MediaType.PROGRESSIVE
-            clean.endsWith(".mov") -> MediaType.PROGRESSIVE
-            clean.endsWith(".ts")  -> MediaType.PROGRESSIVE
-            clean.endsWith(".wmv") -> MediaType.PROGRESSIVE
-            clean.endsWith(".flv") -> MediaType.PROGRESSIVE
-            clean.endsWith(".webm") -> MediaType.PROGRESSIVE
-            // Real-Debrid and similar direct download links
-            clean.contains("real-debrid") -> MediaType.PROGRESSIVE
-            clean.contains("download") -> MediaType.PROGRESSIVE
-            else -> MediaType.PROGRESSIVE // default to progressive for unknown URLs
+            clean.endsWith(".m3u8") || clean.contains(".m3u8") -> StreamType.HLS
+            clean.endsWith(".mpd") || clean.contains(".mpd") -> StreamType.DASH
+            else -> StreamType.HLS
         }
     }
 
     private fun buildLoadControl(): LoadControl {
         return DefaultLoadControl.Builder()
-            .setBufferDurationsMs(
-                10_000,
-                2 * 60 * 60 * 1000,
-                5_000,
-                10_000
-            )
+            .setBufferDurationsMs(5_000, 30_000, 2_500, 5_000)
             .setTargetBufferBytes(Int.MAX_VALUE)
             .setPrioritizeTimeOverSizeThresholds(false)
             .build()
     }
 
-    private fun initializePlayer(url: String) {
+    private fun startPlayer(urlOrPath: String, fromFile: Boolean) {
         val cacheDataSourceFactory = CacheManager.buildCacheDataSourceFactory()
-        val mediaType = detectMediaType(url)
-
-        cacheStatusText.text = "▼ Connecting... [${mediaType.name}]"
 
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(cacheDataSourceFactory))
@@ -122,13 +165,18 @@ class PlayerActivity : FragmentActivity() {
             .build().also { exoPlayer ->
                 playerView.player = exoPlayer
 
-                val mediaSource = when (mediaType) {
-                    MediaType.HLS -> HlsMediaSource.Factory(cacheDataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(url))
-                    MediaType.DASH -> DashMediaSource.Factory(cacheDataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(url))
-                    MediaType.PROGRESSIVE -> ProgressiveMediaSource.Factory(cacheDataSourceFactory)
-                        .createMediaSource(MediaItem.fromUri(url))
+                val mediaSource = if (fromFile) {
+                    // Playing from local SSD file
+                    ProgressiveMediaSource.Factory(cacheDataSourceFactory)
+                        .createMediaSource(MediaItem.fromUri("file://$urlOrPath"))
+                } else {
+                    // Fallback: direct network stream
+                    when (detectMediaType(urlOrPath)) {
+                        StreamType.HLS -> HlsMediaSource.Factory(cacheDataSourceFactory)
+                            .createMediaSource(MediaItem.fromUri(urlOrPath))
+                        StreamType.DASH -> DashMediaSource.Factory(cacheDataSourceFactory)
+                            .createMediaSource(MediaItem.fromUri(urlOrPath))
+                    }
                 }
 
                 exoPlayer.setMediaSource(mediaSource)
@@ -139,7 +187,7 @@ class PlayerActivity : FragmentActivity() {
                     override fun onPlaybackStateChanged(state: Int) {
                         when (state) {
                             Player.STATE_BUFFERING -> showLoading(true)
-                            Player.STATE_READY -> { showLoading(false); updateCacheStatus() }
+                            Player.STATE_READY -> showLoading(false)
                             Player.STATE_ENDED -> finish()
                             else -> {}
                         }
@@ -150,11 +198,6 @@ class PlayerActivity : FragmentActivity() {
                     }
                 })
             }
-    }
-
-    private fun updateCacheStatus() {
-        val stats = CacheManager.getCacheStats()
-        cacheStatusText.text = "Cache: ${stats.usedGb}GB / ${stats.maxGb}GB  ▼ Buffering to SSD..."
     }
 
     private fun showLoading(show: Boolean) {
@@ -188,8 +231,11 @@ class PlayerActivity : FragmentActivity() {
 
     override fun onDestroy() {
         super.onDestroy()
+        downloadJob?.cancel()
         player?.release()
         player = null
+        // Delete downloaded file from SSD on exit
+        downloadedFile?.delete()
         CacheManager.clearCache()
     }
 

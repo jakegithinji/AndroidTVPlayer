@@ -8,7 +8,6 @@ import androidx.media3.database.StandaloneDatabaseProvider
 import androidx.media3.datasource.DefaultDataSource
 import androidx.media3.datasource.DefaultHttpDataSource
 import androidx.media3.datasource.cache.CacheDataSource
-import androidx.media3.datasource.cache.CacheWriter
 import androidx.media3.datasource.cache.LeastRecentlyUsedCacheEvictor
 import androidx.media3.datasource.cache.SimpleCache
 import java.io.File
@@ -83,36 +82,28 @@ object CacheManager {
 
     fun buildCacheDataSourceFactory(): CacheDataSource.Factory {
         val cache = simpleCache ?: run { buildCache(); simpleCache!! }
-
         val httpDataSourceFactory = DefaultHttpDataSource.Factory()
             .setAllowCrossProtocolRedirects(true)
             .setConnectTimeoutMs(15_000)
             .setReadTimeoutMs(15_000)
-            // Large buffer to keep download pipe full
-            .setDefaultRequestProperties(mapOf(
-                "Connection" to "keep-alive"
-            ))
-
         val upstreamFactory = DefaultDataSource.Factory(appContext, httpDataSourceFactory)
-
         return CacheDataSource.Factory()
             .setCache(cache)
             .setUpstreamDataSourceFactory(upstreamFactory)
             .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE)
-            // Remove the 2MB per-resource cap — allow unlimited file size caching
     }
 
-    fun getCacheStats(): CacheStats {
-        val cache = simpleCache ?: return CacheStats(0L, SSD_CACHE_SIZE_BYTES, resolveCacheDirectory())
+    fun getDownloadFile(url: String): File {
         val cacheDir = resolveCacheDirectory()
-        val usedBytes = cache.cacheSpace
-        val availableBytes = getAvailableSpace(cacheDir)
-        val maxBytes = minOf(SSD_CACHE_SIZE_BYTES, usedBytes + availableBytes)
-        return CacheStats(usedBytes, maxBytes, cacheDir)
+        val fileName = url.substringAfterLast("/").substringBefore("?")
+            .ifEmpty { "stream_${System.currentTimeMillis()}.mkv" }
+        return File(cacheDir, fileName)
     }
 
     fun clearCache() {
         try {
+            // Delete all files in cache dir
+            resolveCacheDirectory().listFiles()?.forEach { it.delete() }
             simpleCache?.let { c ->
                 c.keys.toList().forEach { key -> c.removeResource(key) }
             }
@@ -120,6 +111,11 @@ object CacheManager {
         } catch (e: Exception) {
             Log.e(TAG, "Error clearing cache", e)
         }
+    }
+
+    fun getAvailableSpaceGb(): Double {
+        val cacheDir = resolveCacheDirectory()
+        return getAvailableSpace(cacheDir) / (1024.0 * 1024 * 1024)
     }
 
     fun rebuildCache() { buildCache() }
@@ -132,18 +128,5 @@ object CacheManager {
         } catch (e: Exception) {
             Log.e(TAG, "Error releasing cache", e)
         }
-    }
-
-    data class CacheStats(
-        val usedBytes: Long,
-        val maxBytes: Long,
-        val cacheDir: File
-    ) {
-        val usedMb: Long get() = usedBytes / (1024 * 1024)
-        val maxMb: Long get() = maxBytes / (1024 * 1024)
-        val usedGb: String get() = "%.2f".format(usedBytes / (1024.0 * 1024 * 1024))
-        val maxGb: String get() = "%.1f".format(maxBytes / (1024.0 * 1024 * 1024))
-        val percentUsed: Int get() = if (maxBytes > 0) ((usedBytes * 100) / maxBytes).toInt() else 0
-        val storagePath: String get() = cacheDir.absolutePath
     }
 }
