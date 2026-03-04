@@ -111,7 +111,14 @@ class PlayerActivity : FragmentActivity() {
 
     override fun onStart() { super.onStart(); player?.play() }
     override fun onStop() { super.onStop(); player?.pause() }
-    override fun onDestroy() { super.onDestroy(); player?.release(); player = null }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        player?.release()
+        player = null
+        // Clear SSD cache when exiting the stream
+        CacheManager.clearCache()
+    }
 
     companion object {
         private const val EXTRA_STREAM_JSON = "extra_stream_json"
