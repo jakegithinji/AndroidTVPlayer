@@ -105,7 +105,7 @@ class PlayerActivity : FragmentActivity() {
                 5_000,
                 10_000
             )
-            .setTargetBufferBytes(128 * 1024 * 1024)
+            .setTargetBufferBytes(Int.MAX_VALUE)
             .setPrioritizeTimeOverSizeThresholds(false)
             .build()
     }
