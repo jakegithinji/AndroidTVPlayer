@@ -1,0 +1,7 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <string name="app_name">TV Player</string>
+    <string name="row_streams">Streams</string>
+    <string name="row_cache_status">Cache Status</string>
+    <string name="row_settings">Settings</string>
+</resources>

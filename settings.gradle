@@ -1,0 +1,2 @@
+rootProject.name = "AndroidTVPlayer"
+include ':app'
