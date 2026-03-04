@@ -2,6 +2,9 @@ package com.androidtvplayer.cache
 
 import android.util.Log
 import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.async
+import kotlinx.coroutines.awaitAll
+import kotlinx.coroutines.coroutineScope
 import kotlinx.coroutines.isActive
 import kotlinx.coroutines.withContext
 import java.io.BufferedInputStream
@@ -10,28 +13,11 @@ import java.io.RandomAccessFile
 import java.net.HttpURLConnection
 import java.net.URL
 
-/**
- * StreamDownloader
- *
- * Downloads a file to the SSD at maximum speed using:
- * - 16 parallel download threads (each downloads a chunk of the file)
- * - 8MB read buffers per thread
- * - HTTP Range requests for parallel chunked downloading
- *
- * Reports progress via onProgress callback.
- * Once MIN_PLAY_THRESHOLD is downloaded, signals ready for playback.
- */
 object StreamDownloader {
 
     private const val TAG = "StreamDownloader"
-
-    // Start playback after 3% of file is downloaded
     private const val MIN_PLAY_THRESHOLD = 0.03
-
-    // Number of parallel download threads
     private const val PARALLEL_THREADS = 16
-
-    // Read buffer per thread: 8MB
     private const val BUFFER_SIZE = 8 * 1024 * 1024
 
     data class DownloadState(
@@ -52,23 +38,18 @@ object StreamDownloader {
         outputFile: File,
         onProgress: (DownloadState) -> Unit
     ) = withContext(Dispatchers.IO) {
-
         try {
-            // Step 1: Get file size via HEAD request
             val totalBytes = getFileSize(url)
             Log.i(TAG, "Total file size: ${totalBytes / (1024 * 1024)} MB")
 
             if (totalBytes <= 0) {
-                // Fallback: single thread download if size unknown
                 singleThreadDownload(url, outputFile, onProgress)
                 return@withContext
             }
 
-            // Step 2: Pre-allocate file on SSD for maximum write speed
             outputFile.parentFile?.mkdirs()
             RandomAccessFile(outputFile, "rw").use { it.setLength(totalBytes) }
 
-            // Step 3: Split file into chunks for parallel downloading
             val chunkSize = totalBytes / PARALLEL_THREADS
             val chunks = (0 until PARALLEL_THREADS).map { i ->
                 val start = i * chunkSize
@@ -76,52 +57,50 @@ object StreamDownloader {
                 Pair(start, end)
             }
 
-            // Step 4: Track progress across all threads
             val downloadedPerChunk = LongArray(PARALLEL_THREADS)
             var lastSpeedCheck = System.currentTimeMillis()
             var lastBytesForSpeed = 0L
             var playbackSignaled = false
 
-            // Step 5: Launch parallel download coroutines
-            val jobs = chunks.mapIndexed { index, (start, end) ->
-                kotlinx.coroutines.async(Dispatchers.IO) {
-                    downloadChunk(url, outputFile, start, end, index) { bytesDownloaded ->
-                        downloadedPerChunk[index] = bytesDownloaded
+            coroutineScope {
+                val jobs = chunks.mapIndexed { index, (start, end) ->
+                    async(Dispatchers.IO) {
+                        downloadChunk(url, outputFile, start, end, index) { bytesDownloaded ->
+                            synchronized(downloadedPerChunk) {
+                                downloadedPerChunk[index] = bytesDownloaded
+                            }
 
-                        val totalDownloaded = downloadedPerChunk.sum()
-                        val now = System.currentTimeMillis()
-                        val elapsed = now - lastSpeedCheck
+                            val totalDownloaded = downloadedPerChunk.sum()
+                            val now = System.currentTimeMillis()
+                            val elapsed = now - lastSpeedCheck
 
-                        var speedMbps = 0.0
-                        if (elapsed >= 500) {
-                            val bytesDelta = totalDownloaded - lastBytesForSpeed
-                            speedMbps = (bytesDelta * 8.0) / (elapsed * 1000.0)
-                            lastSpeedCheck = now
-                            lastBytesForSpeed = totalDownloaded
-                        }
+                            var speedMbps = 0.0
+                            if (elapsed >= 500) {
+                                val bytesDelta = totalDownloaded - lastBytesForSpeed
+                                speedMbps = (bytesDelta * 8.0) / (elapsed * 1000.0)
+                                lastSpeedCheck = now
+                                lastBytesForSpeed = totalDownloaded
+                            }
 
-                        val progress = totalDownloaded.toDouble() / totalBytes
-                        val readyToPlay = progress >= MIN_PLAY_THRESHOLD
+                            val progress = totalDownloaded.toDouble() / totalBytes
+                            if (progress >= MIN_PLAY_THRESHOLD && !playbackSignaled) {
+                                playbackSignaled = true
+                            }
 
-                        if (readyToPlay && !playbackSignaled) {
-                            playbackSignaled = true
-                        }
-
-                        onProgress(
-                            DownloadState(
-                                downloadedBytes = totalDownloaded,
-                                totalBytes = totalBytes,
-                                speedMbps = speedMbps,
-                                isReadyToPlay = readyToPlay,
-                                isComplete = false
+                            onProgress(
+                                DownloadState(
+                                    downloadedBytes = totalDownloaded,
+                                    totalBytes = totalBytes,
+                                    speedMbps = speedMbps,
+                                    isReadyToPlay = progress >= MIN_PLAY_THRESHOLD,
+                                    isComplete = false
+                                )
                             )
-                        )
+                        }
                     }
                 }
+                jobs.awaitAll()
             }
-
-            // Wait for all chunks to complete
-            jobs.forEach { it.await() }
 
             onProgress(
                 DownloadState(
@@ -132,7 +111,6 @@ object StreamDownloader {
                     isComplete = true
                 )
             )
-
             Log.i(TAG, "Download complete: ${outputFile.absolutePath}")
 
         } catch (e: Exception) {
@@ -163,7 +141,6 @@ object StreamDownloader {
 
             val buffer = ByteArray(BUFFER_SIZE)
             RandomAccessFile(outputFile, "rw").use { raf ->
-                raf.seek(start)
                 BufferedInputStream(connection.inputStream, BUFFER_SIZE).use { input ->
                     var bytesRead: Int
                     while (isActive) {

@@ -130,3 +130,23 @@ object CacheManager {
         }
     }
 }
+
+    fun getCacheStats(): CacheStats {
+        val cacheDir = resolveCacheDirectory()
+        val availableBytes = getAvailableSpace(cacheDir)
+        val usedBytes = SSD_CACHE_SIZE_BYTES - availableBytes
+        return CacheStats(usedBytes.coerceAtLeast(0), SSD_CACHE_SIZE_BYTES, cacheDir)
+    }
+
+    data class CacheStats(
+        val usedBytes: Long,
+        val maxBytes: Long,
+        val cacheDir: File
+    ) {
+        val usedMb: Long get() = usedBytes / (1024 * 1024)
+        val maxMb: Long get() = maxBytes / (1024 * 1024)
+        val usedGb: String get() = "%.2f".format(usedBytes / (1024.0 * 1024 * 1024))
+        val maxGb: String get() = "%.1f".format(maxBytes / (1024.0 * 1024 * 1024))
+        val percentUsed: Int get() = if (maxBytes > 0) ((usedBytes * 100) / maxBytes).toInt() else 0
+        val storagePath: String get() = cacheDir.absolutePath
+    }
