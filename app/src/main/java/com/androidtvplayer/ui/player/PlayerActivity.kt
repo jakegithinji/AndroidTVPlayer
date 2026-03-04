@@ -54,42 +54,46 @@ class PlayerActivity : FragmentActivity() {
         updateCacheStatus()
     }
 
-    /**
-     * Resolves the stream URL from either:
-     * - An internal intent (launched from browse screen)
-     * - An external VIEW intent (clicked link in browser/app)
-     * - An external SEND intent (shared URL from another app)
-     */
     private fun resolveUrl(intent: Intent): String? {
-        // Launched internally from browse screen
         intent.getStringExtra(EXTRA_STREAM_JSON)?.let { json ->
             return Gson().fromJson(json, StreamItem::class.java).url
         }
-
-        // Opened via VIEW intent (browser, file manager, external app)
         if (intent.action == Intent.ACTION_VIEW) {
             intent.dataString?.let { return it }
             intent.data?.toString()?.let { return it }
         }
-
-        // Opened via SEND intent (share sheet from another app)
         if (intent.action == Intent.ACTION_SEND) {
             intent.getStringExtra(Intent.EXTRA_TEXT)?.let { text ->
-                // Extract URL from shared text (in case it has extra text around it)
                 val urlRegex = Regex("https?://\\S+")
                 return urlRegex.find(text)?.value ?: text.trim()
             }
         }
-
         return null
     }
 
-    private fun detectStreamType(url: String): StreamType {
+    private enum class MediaType { HLS, DASH, PROGRESSIVE }
+
+    private fun detectMediaType(url: String): MediaType {
+        val clean = url.lowercase().split("?")[0] // ignore query params
         return when {
-            url.contains(".mpd", ignoreCase = true) -> StreamType.DASH
-            url.contains(".m3u8", ignoreCase = true) -> StreamType.HLS
-            url.contains("manifest", ignoreCase = true) -> StreamType.DASH
-            else -> StreamType.HLS // default to HLS
+            clean.endsWith(".m3u8") -> MediaType.HLS
+            clean.contains(".m3u8") -> MediaType.HLS
+            clean.endsWith(".mpd") -> MediaType.DASH
+            clean.contains(".mpd") -> MediaType.DASH
+            clean.contains("manifest") && !clean.contains(".mp4") -> MediaType.DASH
+            // Direct file formats
+            clean.endsWith(".mkv") -> MediaType.PROGRESSIVE
+            clean.endsWith(".mp4") -> MediaType.PROGRESSIVE
+            clean.endsWith(".avi") -> MediaType.PROGRESSIVE
+            clean.endsWith(".mov") -> MediaType.PROGRESSIVE
+            clean.endsWith(".ts")  -> MediaType.PROGRESSIVE
+            clean.endsWith(".wmv") -> MediaType.PROGRESSIVE
+            clean.endsWith(".flv") -> MediaType.PROGRESSIVE
+            clean.endsWith(".webm") -> MediaType.PROGRESSIVE
+            // Real-Debrid and similar direct download links
+            clean.contains("real-debrid") -> MediaType.PROGRESSIVE
+            clean.contains("download") -> MediaType.PROGRESSIVE
+            else -> MediaType.PROGRESSIVE // default to progressive for unknown URLs
         }
     }
 
@@ -108,9 +112,9 @@ class PlayerActivity : FragmentActivity() {
 
     private fun initializePlayer(url: String) {
         val cacheDataSourceFactory = CacheManager.buildCacheDataSourceFactory()
-        val streamType = detectStreamType(url)
+        val mediaType = detectMediaType(url)
 
-        cacheStatusText.text = "▼ Connecting to stream..."
+        cacheStatusText.text = "▼ Connecting... [${mediaType.name}]"
 
         player = ExoPlayer.Builder(this)
             .setMediaSourceFactory(DefaultMediaSourceFactory(cacheDataSourceFactory))
@@ -118,10 +122,12 @@ class PlayerActivity : FragmentActivity() {
             .build().also { exoPlayer ->
                 playerView.player = exoPlayer
 
-                val mediaSource = when (streamType) {
-                    StreamType.HLS -> HlsMediaSource.Factory(cacheDataSourceFactory)
+                val mediaSource = when (mediaType) {
+                    MediaType.HLS -> HlsMediaSource.Factory(cacheDataSourceFactory)
                         .createMediaSource(MediaItem.fromUri(url))
-                    StreamType.DASH -> DashMediaSource.Factory(cacheDataSourceFactory)
+                    MediaType.DASH -> DashMediaSource.Factory(cacheDataSourceFactory)
+                        .createMediaSource(MediaItem.fromUri(url))
+                    MediaType.PROGRESSIVE -> ProgressiveMediaSource.Factory(cacheDataSourceFactory)
                         .createMediaSource(MediaItem.fromUri(url))
                 }
 
