@@ -100,7 +100,6 @@ object CacheManager {
             .setUpstreamDataSourceFactory(upstreamFactory)
             .setFlags(CacheDataSource.FLAG_BLOCK_ON_CACHE)
             // Remove the 2MB per-resource cap — allow unlimited file size caching
-            .setMaxUpstreamBitrate(Int.MAX_VALUE)
     }
 
     fun getCacheStats(): CacheStats {
