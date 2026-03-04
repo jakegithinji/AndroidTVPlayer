@@ -16,10 +16,9 @@ class CacheCardPresenter : Presenter() {
         return ViewHolder(view)
     }
 
-    override fun onBindViewHolder(viewHolder: ViewHolder, item: Any) {
-        val stats = item as CacheManager.CacheStats
+    override fun onBindViewHolder(viewHolder: ViewHolder, item: Any?) {
+        val stats = item as? CacheManager.CacheStats ?: return
         val view = viewHolder.view
-
         view.findViewById<TextView>(R.id.cache_used).text =
             "${stats.usedMb} MB / ${stats.maxMb} MB used"
         view.findViewById<TextView>(R.id.cache_path).text = stats.storagePath
@@ -37,12 +36,10 @@ class SettingsCardPresenter : Presenter() {
         return ViewHolder(view)
     }
 
-    override fun onBindViewHolder(viewHolder: ViewHolder, item: Any) {
-        val option = item as SettingsOption
-        view(viewHolder).findViewById<TextView>(R.id.settings_label).text = option.label
+    override fun onBindViewHolder(viewHolder: ViewHolder, item: Any?) {
+        val option = item as? SettingsOption ?: return
+        viewHolder.view.findViewById<TextView>(R.id.settings_label).text = option.label
     }
-
-    private fun view(vh: ViewHolder) = vh.view
 
     override fun onUnbindViewHolder(viewHolder: ViewHolder) {}
 }
