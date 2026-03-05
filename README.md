@@ -138,3 +138,4 @@ Settings → Apps → TV Player → Permissions.
 | `androidx.leanback:leanback` | 1.2.0-alpha04 | TV UI |
 | `com.github.bumptech.glide:glide` | 4.16.0 | Thumbnail loading |
 | `com.google.code.gson:gson` | 2.10.1 | JSON serialization |
+# force rebuild Thu Mar  5 10:04:19 EAT 2026
