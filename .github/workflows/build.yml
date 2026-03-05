@@ -33,12 +33,16 @@ jobs:
       - name: Build debug APK
         run: ./gradlew assembleDebug 2>&1 | tee build.log; grep "^e:" build.log || true; exit ${PIPESTATUS[0]}
 
+      - name: Find APK
+        if: success()
+        run: find . -name "*.apk" -type f
+
       - name: Upload APK
         if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TVPlayer-debug
-          path: app/build/outputs/apk/debug/app-debug.apk
+          path: "**/*.apk"
           retention-days: 30
 
       - name: Upload build log on failure
