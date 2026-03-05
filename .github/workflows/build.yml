@@ -31,7 +31,7 @@ jobs:
           chmod +x gradlew
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug 2>&1 | tee build.log; grep "^e:" build.log || true; exit ${PIPESTATUS[0]}
+        run: ./gradlew assembleDebug --info 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
 
       - name: Find APK
         if: success()
