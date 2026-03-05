@@ -19,22 +19,26 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup Gradle 8.2
+      - name: Setup Gradle
         uses: gradle/actions/setup-gradle@v3
-        with:
-          gradle-version: "8.2"
 
-      - name: Generate wrapper
-        run: |
-          gradle wrapper --gradle-version=8.2
-          chmod +x gradlew
+      - name: Generate Gradle Wrapper
+        run: gradle wrapper --gradle-version=8.2
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --stacktrace
+        run: ./gradlew assembleDebug 2>&1 | tee build.log; grep "^e:" build.log || true; exit ${PIPESTATUS[0]}
 
       - name: Upload APK
+        if: success()
         uses: actions/upload-artifact@v4
         with:
           name: TVPlayer-debug
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 30
+
+      - name: Upload build log on failure
+        if: failure()
+        uses: actions/upload-artifact@v4
+        with:
+          name: build-log
+          path: build.log
