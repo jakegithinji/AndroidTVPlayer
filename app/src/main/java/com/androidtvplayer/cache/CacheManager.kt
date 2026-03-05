@@ -42,7 +42,7 @@ object CacheManager {
         )
     }
 
-    private fun getAvailableSpace(dir: File): Long {
+    fun getAvailableSpace(dir: File): Long {
         return try {
             val stat = StatFs(dir.absolutePath)
             stat.availableBlocksLong * stat.blockSizeLong
@@ -100,9 +100,15 @@ object CacheManager {
         return File(cacheDir, fileName)
     }
 
+    fun getCacheStats(): CacheStats {
+        val cacheDir = resolveCacheDirectory()
+        val availableBytes = getAvailableSpace(cacheDir)
+        val usedBytes = (SSD_CACHE_SIZE_BYTES - availableBytes).coerceAtLeast(0)
+        return CacheStats(usedBytes, SSD_CACHE_SIZE_BYTES, cacheDir)
+    }
+
     fun clearCache() {
         try {
-            // Delete all files in cache dir
             resolveCacheDirectory().listFiles()?.forEach { it.delete() }
             simpleCache?.let { c ->
                 c.keys.toList().forEach { key -> c.removeResource(key) }
@@ -129,14 +135,6 @@ object CacheManager {
             Log.e(TAG, "Error releasing cache", e)
         }
     }
-}
-
-    fun getCacheStats(): CacheStats {
-        val cacheDir = resolveCacheDirectory()
-        val availableBytes = getAvailableSpace(cacheDir)
-        val usedBytes = SSD_CACHE_SIZE_BYTES - availableBytes
-        return CacheStats(usedBytes.coerceAtLeast(0), SSD_CACHE_SIZE_BYTES, cacheDir)
-    }
 
     data class CacheStats(
         val usedBytes: Long,
@@ -150,3 +148,4 @@ object CacheManager {
         val percentUsed: Int get() = if (maxBytes > 0) ((usedBytes * 100) / maxBytes).toInt() else 0
         val storagePath: String get() = cacheDir.absolutePath
     }
+}
