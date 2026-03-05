@@ -55,7 +55,7 @@ class PlayerActivity : FragmentActivity() {
 
         playerView = findViewById(R.id.player_view)
         loadingSpinner = findViewById(R.id.loading_spinner)
-        downloadProgress = findViewById(R.id.download_progress)
+        downloadProgress = findViewById(R.id.download_progress) as android.widget.ProgressBar as android.widget.ProgressBar
         errorText = findViewById(R.id.error_text)
         statusText = findViewById(R.id.cache_status_text)
         downloadText = findViewById(R.id.download_text)
