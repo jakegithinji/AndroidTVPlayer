@@ -1,7 +1,6 @@
 package com.androidtvplayer.cache
 
 import android.content.Context
-import android.os.Environment
 import android.os.StatFs
 import android.util.Log
 import androidx.media3.database.StandaloneDatabaseProvider
@@ -16,7 +15,6 @@ object CacheManager {
 
     private const val TAG = "CacheManager"
     private const val CACHE_DIR_NAME = "tvplayer_cache"
-    private const val SSD_CACHE_SIZE_BYTES = 128L * 1024 * 1024 * 1024
 
     private var simpleCache: SimpleCache? = null
     private var databaseProvider: StandaloneDatabaseProvider? = null
@@ -29,9 +27,10 @@ object CacheManager {
 
     private fun buildCache() {
         release()
-        val cacheDir = resolveCacheDirectory()
+        val cacheDir = getCacheDirectory()
         val availableBytes = getAvailableSpace(cacheDir)
-        val cacheSizeBytes = minOf(SSD_CACHE_SIZE_BYTES, availableBytes)
+        // Use 90% of available internal storage
+        val cacheSizeBytes = (availableBytes * 0.9).toLong()
         Log.i(TAG, "Cache dir: ${cacheDir.absolutePath}")
         Log.i(TAG, "Cache size: ${cacheSizeBytes / (1024 * 1024 * 1024)} GB")
         databaseProvider = StandaloneDatabaseProvider(appContext)
@@ -42,42 +41,19 @@ object CacheManager {
         )
     }
 
+    fun getCacheDirectory(): File {
+        val cacheDir = File(appContext.cacheDir, CACHE_DIR_NAME)
+        cacheDir.mkdirs()
+        return cacheDir
+    }
+
     fun getAvailableSpace(dir: File): Long {
         return try {
             val stat = StatFs(dir.absolutePath)
             stat.availableBlocksLong * stat.blockSizeLong
         } catch (e: Exception) {
-            SSD_CACHE_SIZE_BYTES
+            10L * 1024 * 1024 * 1024 // fallback 10GB
         }
-    }
-
-    fun resolveCacheDirectory(): File {
-        val externalDirs = appContext.getExternalFilesDirs(null)
-        for (dir in externalDirs) {
-            if (dir == null) continue
-            if (Environment.getExternalStorageState(dir) == Environment.MEDIA_MOUNTED &&
-                !Environment.isExternalStorageEmulated(dir)) {
-                val cacheDir = File(dir, CACHE_DIR_NAME)
-                if (cacheDir.mkdirs() || cacheDir.exists()) {
-                    Log.i(TAG, "Using SSD: ${cacheDir.absolutePath}")
-                    return cacheDir
-                }
-            }
-        }
-        for (dir in externalDirs) {
-            if (dir == null) continue
-            if (Environment.getExternalStorageState(dir) == Environment.MEDIA_MOUNTED) {
-                val cacheDir = File(dir, CACHE_DIR_NAME)
-                if (cacheDir.mkdirs() || cacheDir.exists()) {
-                    Log.i(TAG, "Using external: ${cacheDir.absolutePath}")
-                    return cacheDir
-                }
-            }
-        }
-        val internalCacheDir = File(appContext.cacheDir, CACHE_DIR_NAME)
-        internalCacheDir.mkdirs()
-        Log.w(TAG, "Using internal: ${internalCacheDir.absolutePath}")
-        return internalCacheDir
     }
 
     fun buildCacheDataSourceFactory(): CacheDataSource.Factory {
@@ -94,22 +70,23 @@ object CacheManager {
     }
 
     fun getDownloadFile(url: String): File {
-        val cacheDir = resolveCacheDirectory()
+        val cacheDir = getCacheDirectory()
         val fileName = url.substringAfterLast("/").substringBefore("?")
             .ifEmpty { "stream_${System.currentTimeMillis()}.mkv" }
         return File(cacheDir, fileName)
     }
 
     fun getCacheStats(): CacheStats {
-        val cacheDir = resolveCacheDirectory()
+        val cacheDir = getCacheDirectory()
         val availableBytes = getAvailableSpace(cacheDir)
-        val usedBytes = (SSD_CACHE_SIZE_BYTES - availableBytes).coerceAtLeast(0)
-        return CacheStats(usedBytes, SSD_CACHE_SIZE_BYTES, cacheDir)
+        val usedBytes = simpleCache?.cacheSpace ?: 0L
+        val maxBytes = usedBytes + availableBytes
+        return CacheStats(usedBytes, maxBytes, cacheDir)
     }
 
     fun clearCache() {
         try {
-            resolveCacheDirectory().listFiles()?.forEach { it.delete() }
+            getCacheDirectory().listFiles()?.forEach { it.delete() }
             simpleCache?.let { c ->
                 c.keys.toList().forEach { key -> c.removeResource(key) }
             }
@@ -118,13 +95,6 @@ object CacheManager {
             Log.e(TAG, "Error clearing cache", e)
         }
     }
-
-    fun getAvailableSpaceGb(): Double {
-        val cacheDir = resolveCacheDirectory()
-        return getAvailableSpace(cacheDir) / (1024.0 * 1024 * 1024)
-    }
-
-    fun rebuildCache() { buildCache() }
 
     fun release() {
         try {
