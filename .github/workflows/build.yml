@@ -19,10 +19,14 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Setup wrapper
+      - name: Setup Gradle
+        uses: gradle/actions/setup-gradle@v3
+        with:
+          gradle-version: '8.2'
+
+      - name: Generate wrapper
         run: |
-          curl -L "https://github.com/gradle/gradle/raw/v8.2.0/gradle/wrapper/gradle-wrapper.jar" -o gradle/wrapper/gradle-wrapper.jar
-          printf 'distributionBase=GRADLE_USER_HOME\ndistributionPath=wrapper/dists\ndistributionUrl=https\\://services.gradle.org/distributions/gradle-8.2-bin.zip\nzipStoreBase=GRADLE_USER_HOME\nzipStorePath=wrapper/dists\n' > gradle/wrapper/gradle-wrapper.properties
+          gradle wrapper --gradle-version=8.2 --distribution-type=bin
           chmod +x gradlew
 
       - name: Build debug APK
