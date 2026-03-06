@@ -19,19 +19,19 @@ jobs:
           java-version: '17'
           distribution: 'temurin'
 
-      - name: Install Gradle 8.2
+      - name: Fix gradle wrapper properties
         run: |
-          wget -q https://services.gradle.org/distributions/gradle-8.2-bin.zip -O /tmp/gradle.zip
-          unzip -q /tmp/gradle.zip -d /opt/gradle
-          echo "/opt/gradle/gradle-8.2/bin" >> $GITHUB_PATH
-
-      - name: Generate wrapper with correct Gradle
-        run: |
-          gradle wrapper --gradle-version=8.2
+          cat > gradle/wrapper/gradle-wrapper.properties << 'PROPS'
+          distributionBase=GRADLE_USER_HOME
+          distributionPath=wrapper/dists
+          distributionUrl=https\://services.gradle.org/distributions/gradle-8.2-bin.zip
+          zipStoreBase=GRADLE_USER_HOME
+          zipStorePath=wrapper/dists
+          PROPS
           chmod +x gradlew
 
       - name: Build debug APK
-        run: ./gradlew assembleDebug --info 2>&1 | tee build.log; exit ${PIPESTATUS[0]}
+        run: ./gradlew assembleDebug 2>&1 | tee build.log; grep "^e:" build.log || true; exit ${PIPESTATUS[0]}
 
       - name: Find APK
         if: success()
