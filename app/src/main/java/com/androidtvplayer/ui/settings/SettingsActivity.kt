@@ -53,7 +53,6 @@ class SettingsFragment : PreferenceFragmentCompat() {
                     if (mb != null && mb > 0) {
                         PreferencesManager.setCacheSizeMb(context, mb)
                         pref.summary = "$mb MB (${mb / 1024} GB)"
-                        CacheManager.rebuildCache()
                         true
                     } else {
                         Toast.makeText(context, "Enter a valid size in MB", Toast.LENGTH_SHORT).show()
